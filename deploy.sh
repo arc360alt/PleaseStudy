@@ -112,11 +112,15 @@ fi
 
 # ---------------------------------------------------------------- build
 if ! $SKIP_BUILD; then
-  step "Building frontend"
-  (cd frontend && npm ci --no-audit --no-fund && npm run build)
-
+  # Nothing the live site uses changes until BOTH builds succeed: the backend binary only takes
+  # effect on the pm2 reload below, and the frontend is built into dist-next and swapped in then.
   step "Building backend (release)"
-  (cd backend && cargo build --release)
+  (cd backend && cargo build --release) || fail "Backend build failed (see the errors above). The live site was not changed."
+
+  step "Building frontend"
+  rm -rf frontend/dist-next
+  (cd frontend && npm ci --no-audit --no-fund && npx tsc -b && npx vite build --outDir dist-next --emptyOutDir) \
+    || fail "Frontend build failed (see the errors above). The live site was not changed."
 fi
 [[ -x backend/target/release/pleasestudy ]] || fail "No backend build found. Run without --skip-build."
 [[ -f frontend/dist/index.html ]] || fail "No frontend build found. Run without --skip-build."
@@ -133,11 +137,19 @@ if [[ -f "$DATABASE_PATH" ]] && command -v sqlite3 >/dev/null; then
     echo "Saved ${BACKUP%.db}-images.tar.gz"
   fi
   # Keep the 10 most recent backups.
-  ls -1t "$ROOT"/backups/pleasestudy-*.db 2>/dev/null | tail -n +11 | xargs rm -f
-  ls -1t "$ROOT"/backups/pleasestudy-*-images.tar.gz 2>/dev/null | tail -n +11 | xargs rm -f
+  # (|| true: having fewer than 10 backups, or none of a kind yet, is not an error)
+  ls -1t "$ROOT"/backups/pleasestudy-*.db 2>/dev/null | tail -n +11 | xargs rm -f || true
+  ls -1t "$ROOT"/backups/pleasestudy-*-images.tar.gz 2>/dev/null | tail -n +11 | xargs rm -f || true
 fi
 
 # ---------------------------------------------------------------- run
+if [[ -d frontend/dist-next ]]; then
+  rm -rf frontend/dist-old
+  [[ -d frontend/dist ]] && mv frontend/dist frontend/dist-old
+  mv frontend/dist-next frontend/dist
+  rm -rf frontend/dist-old
+fi
+
 step "Starting with pm2"
 if pm2 describe pleasestudy >/dev/null 2>&1; then
   pm2 reload ecosystem.config.cjs --update-env

@@ -8,3 +8,5 @@ dist/
 backups/
 *.tsbuildinfo
 backend/images/
+dist-next/
+dist-old/
