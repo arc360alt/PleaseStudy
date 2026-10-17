@@ -22,6 +22,20 @@ Env vars: `PORT` (8080), `DATABASE_PATH` (pleasestudy.db), `STATIC_DIR` (../fron
 
 **The first account you register becomes the admin.** Admins can promote others to moderator under Moderation → Users & roles.
 
+## Deploy (pm2 + one tunnel)
+
+The Rust server serves the website, the API and live-game WebSockets on **one port**, so you only need one process and one tunnel. No separate frontend host is needed.
+
+```sh
+./deploy.sh                # build frontend + backend, back up the DB, start/reload under pm2
+./deploy.sh --skip-build   # just restart
+```
+
+- Settings live in `.env` (created from `.env.example` on first run): `PORT`, `DATABASE_PATH`, `KLIPY_API_KEY`.
+- Point your tunnel at `http://localhost:8080`, e.g. `cloudflared tunnel --url http://localhost:8080`.
+- Each deploy saves a database backup in `backups/` (the last 10 are kept).
+- `pm2 logs pleasestudy` for logs; `pm2 startup` (once) to start on boot.
+
 ## How it works
 
 - **Quizzes**: 1–100 questions, 2–6 answers each (one or more correct), 5–240s timer, optional image/GIF *link* (media is never hosted here, only text).

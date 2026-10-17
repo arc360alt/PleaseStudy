@@ -19,7 +19,7 @@ use std::{
 
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{get, post, put},
+    routing::{any, get, post, put},
     Router,
 };
 use rusqlite::Connection;
@@ -115,8 +115,12 @@ async fn main() {
         .route("/ws", get(live::ws_handler));
 
     // Serve the built frontend; unknown paths fall back to index.html for client-side routing.
-    let spa = ServeDir::new(&static_dir).not_found_service(ServeFile::new(format!("{static_dir}/index.html")));
-    let app = api.fallback_service(spa).layer(CorsLayer::permissive()).with_state(state);
+    // Unknown /api paths get a JSON 404, and missing build assets a plain 404, instead of the app page.
+    let spa = ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html")));
+    let app = api
+        .route("/api/*rest", any(|| async { error::ApiError::not_found("API route") }))
+        .nest_service("/assets", ServeDir::new(format!("{static_dir}/assets")))
+        .fallback_service(spa).layer(CorsLayer::permissive()).with_state(state);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await.expect("failed to bind port");
     tracing::info!("PleaseStudy listening on http://localhost:{port}");

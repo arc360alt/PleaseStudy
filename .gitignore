@@ -4,3 +4,5 @@ dist/
 *.db
 *.db-*
 .DS_Store
+.env
+backups/
