@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, errorText, type Question } from "../api";
 import { importSpreadsheet, templateCsv } from "../importCsv";
+import { BLOOKET_BOOKMARKLET, importBlooket } from "../importBlooket";
 import Modal from "./Modal";
 
 export type ImportResult = {
@@ -13,7 +14,7 @@ export type ImportResult = {
   skipped: { number: number; reason: string }[];
 };
 
-type Tab = "kahoot" | "sheet";
+type Tab = "kahoot" | "blooket" | "sheet";
 
 /** Import a quiz from a public Kahoot link or a spreadsheet (Blooket's CSV template works as-is). */
 export default function ImportKahoot({
@@ -30,11 +31,16 @@ export default function ImportKahoot({
         <button type="button" className={tab === "kahoot" ? "on" : ""} onClick={() => setTab("kahoot")}>
           Kahoot link
         </button>
+        <button type="button" className={tab === "blooket" ? "on" : ""} onClick={() => setTab("blooket")}>
+          Blooket
+        </button>
         <button type="button" className={tab === "sheet" ? "on" : ""} onClick={() => setTab("sheet")}>
-          Spreadsheet / Blooket
+          Spreadsheet
         </button>
       </div>
-      {tab === "kahoot" ? <KahootTab onImported={onImported} /> : <SheetTab onImported={onImported} />}
+      {tab === "kahoot" && <KahootTab onImported={onImported} />}
+      {tab === "blooket" && <BlooketTab onImported={onImported} />}
+      {tab === "sheet" && <SheetTab onImported={onImported} />}
       <p className="muted small-print">Only import quizzes you made or have permission to use.</p>
     </Modal>
   );
@@ -80,6 +86,162 @@ function KahootTab({ onImported }: { onImported: (r: ImportResult) => void }) {
         {busy ? "Importing…" : "Import"}
       </button>
     </form>
+  );
+}
+
+function BlooketTab({ onImported }: { onImported: (r: ImportResult) => void }) {
+  const [method, setMethod] = useState<"pdf" | "bookmark">("pdf");
+  return (
+    <>
+      <div className="seg seg-full seg-tall">
+        <button type="button" className={method === "pdf" ? "on" : ""} onClick={() => setMethod("pdf")}>
+          <strong>Answer key PDF</strong>
+          <small>Easiest. Works for any set you can open</small>
+        </button>
+        <button type="button" className={method === "bookmark" ? "on" : ""} onClick={() => setMethod("bookmark")}>
+          <strong>Copy bookmark</strong>
+          <small>Also keeps time limits and images</small>
+        </button>
+      </div>
+      {method === "pdf" ? <BlooketPdf onImported={onImported} /> : <BlooketBookmark onImported={onImported} />}
+    </>
+  );
+}
+
+function BlooketPdf({ onImported }: { onImported: (r: ImportResult) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  async function pick(f: File | undefined) {
+    if (!f) return;
+    setError("");
+    if (f.size > 20 * 1024 * 1024) return setError("That PDF is too big (max 20 MB).");
+    setBusy(true);
+    try {
+      const { readBlooketPdf } = await import("../importBlooketPdf");
+      const r = await readBlooketPdf(f);
+      const fromName = f.name.replace(/\.pdf$/i, "").replace(/\s*\|\s*Blooket\s*$/i, "").trim();
+      onImported({
+        quiz: { title: (fromName || r.title || "Imported from Blooket").slice(0, 120), description: r.description, cover_url: null, questions: r.questions },
+        source: null,
+        sourceLabel: "the Blooket answer key",
+        imported: r.questions.length,
+        total: r.total,
+        skipped: r.skipped,
+      });
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  }
+
+  return (
+    <div className="import-form">
+      <ol className="blooket-steps">
+        <li>
+          On Blooket, open the set and choose <strong>Print</strong>, then the <strong>answer key</strong>.
+        </li>
+        <li>
+          <strong>Wait for the page to finish loading</strong>, then print it and choose <strong>Save as PDF</strong>.
+        </li>
+        <li>Upload that PDF here.</li>
+      </ol>
+      <input ref={fileInput} type="file" accept="application/pdf,.pdf" hidden onChange={(e) => pick(e.target.files?.[0])} />
+      <button type="button" className="btn btn-primary btn-lg btn-block" disabled={busy} onClick={() => fileInput.current?.click()}>
+        {busy ? "Reading PDF…" : "Choose answer key PDF"}
+      </button>
+      <small className="muted">
+        The PDF is read on your device, not uploaded. Time limits and pictures aren't in the printout, so questions
+        get 20 seconds each and no images. Use the bookmark if you need those.
+      </small>
+      {error && <div className="alert">{error}</div>}
+    </div>
+  );
+}
+
+function BlooketBookmark({ onImported }: { onImported: (r: ImportResult) => void }) {
+  const [text, setText] = useState("");
+  const [error, setError] = useState("");
+  const link = useRef<HTMLAnchorElement>(null);
+
+  // React refuses javascript: links in JSX, so set the bookmark's address directly.
+  useEffect(() => {
+    link.current?.setAttribute("href", BLOOKET_BOOKMARKLET);
+  }, []);
+
+  function run(content: string) {
+    setError("");
+    try {
+      const r = importBlooket(content);
+      onImported({
+        quiz: { title: r.title, description: r.description, cover_url: r.cover_url, questions: r.questions },
+        source: null,
+        sourceLabel: "Blooket",
+        imported: r.questions.length,
+        total: r.total,
+        skipped: r.skipped,
+      });
+    } catch (err) {
+      setError(errorText(err));
+    }
+  }
+
+  return (
+    <div className="import-form">
+      <p className="muted">
+        Blooket doesn't have an export button, so this uses a bookmark that copies a set while you're on Blooket.
+      </p>
+      <ol className="blooket-steps">
+        <li>
+          <strong>Drag this button to your bookmarks bar</strong> (one time only):
+          <div className="bookmarklet-row">
+            <a
+              ref={link}
+              className="btn btn-sm bookmarklet"
+              onClick={(e) => {
+                e.preventDefault();
+                alert("Drag this button onto your bookmarks bar instead of clicking it. Then use it on blooket.com.");
+              }}
+              draggable
+            >
+              ⇩ Copy from Blooket
+            </a>
+            <small className="muted">No bookmarks bar? Press Ctrl+Shift+B (Cmd+Shift+B on Mac).</small>
+          </div>
+        </li>
+        <li>
+          Open <strong>one of your sets</strong> on blooket.com while logged in. The address should contain{" "}
+          <code>/set/</code>.
+        </li>
+        <li>Click the <strong>Copy from Blooket</strong> bookmark. It tells you when the set is copied.</li>
+        <li>Come back here and paste it below.</li>
+      </ol>
+      <textarea
+        className="input paste-box"
+        rows={4}
+        value={text}
+        placeholder="Paste what the bookmark copied…"
+        onChange={(e) => {
+          setText(e.target.value);
+          setError("");
+        }}
+        onPaste={(e) => {
+          const pasted = e.clipboardData.getData("text");
+          if (pasted.trim().startsWith("{")) {
+            e.preventDefault();
+            setText(pasted);
+            run(pasted);
+          }
+        }}
+      />
+      {error && <div className="alert">{error}</div>}
+      <button type="button" className="btn btn-primary btn-lg btn-block" disabled={!text.trim()} onClick={() => run(text)}>
+        Import
+      </button>
+    </div>
   );
 }
 
@@ -130,7 +292,7 @@ function SheetTab({ onImported }: { onImported: (r: ImportResult) => void }) {
   return (
     <div className="import-form">
       <p className="muted">
-        Use <strong>Blooket's spreadsheet template</strong> as-is, or any sheet with a <em>Question</em> column,{" "}
+        Use <strong>Blooket's spreadsheet template</strong> as-is (if you built a set from a CSV), or any sheet with a <em>Question</em> column,{" "}
         <em>Answer 1</em>, <em>Answer 2</em>… columns and a <em>Correct</em> column (numbers like <code>1,3</code>,
         letters, or the answer text).
       </p>
