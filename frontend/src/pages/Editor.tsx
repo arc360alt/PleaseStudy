@@ -234,7 +234,7 @@ export default function Editor() {
           <h1 className="display">{id ? "Edit quiz" : "New quiz"}</h1>
           {!id && (
             <button className="btn" onClick={() => setImporting(true)}>
-              ⇪ Import from Kahoot
+              ⇪ Import quiz
             </button>
           )}
         </div>

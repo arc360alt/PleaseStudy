@@ -61,7 +61,7 @@ export default function Library() {
         <h1 className="display">Library</h1>
         <div className="row-wrap">
           <button className="btn" onClick={() => setImporting(true)}>
-            ⇪ Import from Kahoot
+            ⇪ Import quiz
           </button>
           <Link to="/create" className="btn btn-primary">
             + New quiz

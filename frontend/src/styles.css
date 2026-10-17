@@ -3551,3 +3551,14 @@ section > h2 {
   margin: 6px 0 0;
   padding-left: 18px;
 }
+.paste-box {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  white-space: pre;
+}
+.import-form code {
+  font-family: var(--mono);
+  background: var(--paper-deep);
+  padding: 0 4px;
+  border-radius: 4px;
+}
