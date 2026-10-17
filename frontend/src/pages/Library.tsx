@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Link, Navigate, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { api, errorText, type Assignment, type QuizSummary } from "../api";
 import { useAuth } from "../auth";
 import QuizCard from "../components/QuizCard";
+import ImportKahoot from "../components/ImportKahoot";
 
 export function formatDate(secs: number) {
   return new Date(secs * 1000).toLocaleString(undefined, {
@@ -15,6 +16,8 @@ export function formatDate(secs: number) {
 
 export default function Library() {
   const { user, ready } = useAuth();
+  const navigate = useNavigate();
+  const [importing, setImporting] = useState(false);
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") === "assignments" ? "assignments" : "quizzes";
   const [quizzes, setQuizzes] = useState<QuizSummary[] | null>(null);
@@ -56,9 +59,20 @@ export default function Library() {
     <>
       <div className="page-head row-between">
         <h1 className="display">Library</h1>
-        <Link to="/create" className="btn btn-primary">
-          + New quiz
-        </Link>
+        <div className="row-wrap">
+          <button className="btn" onClick={() => setImporting(true)}>
+            ⇪ Import from Kahoot
+          </button>
+          <Link to="/create" className="btn btn-primary">
+            + New quiz
+          </Link>
+        </div>
+        {importing && (
+          <ImportKahoot
+            onClose={() => setImporting(false)}
+            onImported={(r) => navigate("/create", { state: { imported: r } })}
+          />
+        )}
       </div>
       <div className="tabs">
         <button className={tab === "quizzes" ? "on" : ""} onClick={() => setParams({})}>

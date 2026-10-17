@@ -4,6 +4,7 @@ mod auth;
 mod db;
 mod error;
 mod gifs;
+mod import;
 mod live;
 mod models;
 mod moderation;
@@ -99,6 +100,7 @@ async fn main() {
                 .layer(DefaultBodyLimit::max(profile::MAX_AVATAR_BYTES + 64 * 1024)),
         )
         .route("/api/avatars/:id", get(profile::get_avatar))
+        .route("/api/import/kahoot", post(import::kahoot))
         .route("/api/gifs/status", get(gifs::status))
         .route("/api/gifs/search", get(gifs::search))
         .route("/api/assignments", post(assignments::create))

@@ -3516,3 +3516,38 @@ section > h2 {
   flex: 1;
   min-width: 220px;
 }
+
+/* ---------- import ---------- */
+.import-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.import-notes {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.import-summary {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  border-color: var(--good);
+  box-shadow: 5px 5px 0 var(--good);
+  padding: 14px 16px;
+}
+.import-summary details {
+  margin-top: 6px;
+}
+.import-summary summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.import-summary ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, errorText, store, type Question, type QuestionKind, type Quiz } from "../api";
 import { useAuth } from "../auth";
 import ImageField from "../components/ImageField";
+import ImportKahoot, { ImportSummary, type ImportResult } from "../components/ImportKahoot";
 import { Shape, SLOT_NAMES } from "../components/Shapes";
 
 const TIMES = [5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240];
@@ -99,8 +100,32 @@ export default function Editor() {
       return n;
     });
 
+  const location = useLocation();
+  const [importing, setImporting] = useState(false);
+  const [imported, setImported] = useState<ImportResult | null>(null);
+
+  function applyImport(r: ImportResult) {
+    setTitle(r.quiz.title);
+    setDescription(r.quiz.description);
+    setCover(r.quiz.cover_url ?? "");
+    setQuestions(
+      r.quiz.questions.map((q) => ({ ...q, kind: q.kind ?? "single", image_url: q.image_url ?? "", key: nextKey++ })),
+    );
+    setImported(r);
+    setImporting(false);
+    setShowProblems(false);
+    setLoaded(true);
+  }
+
   // Load existing quiz, or restore an unsaved draft for a new one.
   useEffect(() => {
+    const fromLibrary = (location.state as { imported?: ImportResult } | null)?.imported;
+    if (!id && fromLibrary) {
+      applyImport(fromLibrary);
+      // Don't re-import on refresh/back; the autosaved draft takes over from here.
+      navigate(location.pathname, { replace: true, state: null });
+      return;
+    }
     if (id) {
       api<Quiz>(`/api/quizzes/${id}`)
         .then((q) => {
@@ -205,7 +230,25 @@ export default function Editor() {
   return (
     <div className="editor">
       <div className="page-head">
-        <h1 className="display">{id ? "Edit quiz" : "New quiz"}</h1>
+        <div className="row-between">
+          <h1 className="display">{id ? "Edit quiz" : "New quiz"}</h1>
+          {!id && (
+            <button className="btn" onClick={() => setImporting(true)}>
+              ⇪ Import from Kahoot
+            </button>
+          )}
+        </div>
+        {imported && <ImportSummary result={imported} onDismiss={() => setImported(null)} />}
+        {importing && (
+          <ImportKahoot
+            onClose={() => setImporting(false)}
+            onImported={(r) => {
+              const hasWork = title.trim() || questions.some((q) => q.text.trim());
+              if (hasWork && !confirm("Replace the quiz you're working on with the imported one?")) return;
+              applyImport(r);
+            }}
+          />
+        )}
         {status === "approved" && (
           <p className="alert alert-info">This quiz is public. Saving changes sends it back to the moderators.</p>
         )}
