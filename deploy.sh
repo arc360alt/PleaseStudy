@@ -4,8 +4,9 @@
 # One process serves the website, the API and live-game WebSockets on a single port,
 # so a single tunnel (e.g. Cloudflare Tunnel) pointed at http://localhost:$PORT is all you need.
 #
-# Usage:  ./deploy.sh            build + start/reload
-#         ./deploy.sh --skip-build   just restart with the current build
+# Usage:  ./deploy.sh               pull the latest code from git, build, start/reload
+#         ./deploy.sh --no-pull     build + start/reload without updating from git
+#         ./deploy.sh --skip-build  just restart with the current build (no pull)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,7 +17,51 @@ step() { printf '\n\033[1;33m▶ %s\033[0m\n' "$*"; }
 fail() { printf '\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
 SKIP_BUILD=false
-[[ "${1:-}" == "--skip-build" ]] && SKIP_BUILD=true
+NO_PULL=false
+for arg in "$@"; do
+  case "$arg" in
+    --skip-build) SKIP_BUILD=true; NO_PULL=true ;;
+    --no-pull) NO_PULL=true ;;
+    *) fail "Unknown option: $arg (use --no-pull or --skip-build)" ;;
+  esac
+done
+
+# ---------------------------------------------------------------- update from git
+if ! $NO_PULL; then
+  if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    step "Updating from git"
+    BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+    UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+    if [[ "$BRANCH" == "HEAD" || -z "$UPSTREAM" ]]; then
+      bold "No upstream branch to pull from (branch: $BRANCH). Deploying the current checkout."
+    else
+      # Never clobber local edits: a deploy should only ever move forward to what's on the remote.
+      if ! git diff --quiet || ! git diff --cached --quiet; then
+        git status --short
+        fail "There are uncommitted changes (above). Commit or stash them, or deploy as-is with ./deploy.sh --no-pull"
+      fi
+      git fetch --prune
+      OLD_HEAD="$(git rev-parse HEAD)"
+      if ! git merge --ff-only "$UPSTREAM" >/dev/null 2>&1; then
+        fail "Local '$BRANCH' and '$UPSTREAM' have diverged. Sort it out with git (e.g. git pull --rebase), then deploy again."
+      fi
+      NEW_HEAD="$(git rev-parse HEAD)"
+      if [[ "$OLD_HEAD" == "$NEW_HEAD" ]]; then
+        echo "Already up to date with $UPSTREAM ($(git rev-parse --short HEAD))."
+      else
+        echo "Updated $BRANCH: $(git rev-parse --short "$OLD_HEAD") → $(git rev-parse --short "$NEW_HEAD")"
+        git log --oneline "$OLD_HEAD..$NEW_HEAD" | sed 's/^/  /'
+        # Bash reads scripts as it runs them, so if this file changed, hand over to the new version.
+        if ! git diff --quiet "$OLD_HEAD" "$NEW_HEAD" -- deploy.sh; then
+          bold "deploy.sh was updated, restarting with the new version…"
+          exec "$ROOT/deploy.sh" --no-pull
+        fi
+      fi
+    fi
+  else
+    bold "Not a git checkout, skipping update."
+  fi
+fi
 
 # ---------------------------------------------------------------- config
 if [[ ! -f .env ]]; then

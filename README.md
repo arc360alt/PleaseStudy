@@ -27,7 +27,8 @@ Env vars: `PORT` (8010), `DATABASE_PATH` (pleasestudy.db), `STATIC_DIR` (../fron
 The Rust server serves the website, the API and live-game WebSockets on **one port**, so you only need one process and one tunnel. No separate frontend host is needed.
 
 ```sh
-./deploy.sh                # build frontend + backend, back up the DB, start/reload under pm2
+./deploy.sh                # git pull, build frontend + backend, back up the DB, start/reload under pm2
+./deploy.sh --no-pull      # same, but deploy the code as it is without pulling
 ./deploy.sh --skip-build   # just restart
 ```
 
