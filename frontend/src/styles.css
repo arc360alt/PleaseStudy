@@ -3582,3 +3582,27 @@ section > h2 {
   color: #fff;
   cursor: grab;
 }
+
+/* ---------- photo uploads ---------- */
+.image-field-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+.upload-btn {
+  box-shadow: 2px 2px 0 var(--shadow-c);
+  white-space: nowrap;
+}
+.upload-error {
+  color: var(--bad);
+  font-weight: 700;
+}
+@media (max-width: 560px) {
+  .image-field {
+    flex-wrap: wrap;
+  }
+  .image-field .input {
+    flex-basis: 100%;
+  }
+}

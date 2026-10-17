@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { api, discardImport, errorText, isImageLink, store, type Question, type QuestionKind, type Quiz } from "../api";
+import { api, apiUpload, discardImport, errorText, getToken, isImageLink, store, type Question, type QuestionKind, type Quiz } from "../api";
 import { useAuth } from "../auth";
 import ImageField from "../components/ImageField";
 import ImportKahoot, { ImportSummary, type ImportResult } from "../components/ImportKahoot";
@@ -109,10 +109,27 @@ export default function Editor() {
   const [importId, setImportId] = useState<string | null>(null);
   const pendingImport = useRef<string | null>(null);
   pendingImport.current = importId;
+  // Photos uploaded while editing a saved quiz: if the editor closes without saving, delete them.
+  const unsavedUploads = useRef<Set<string>>(new Set());
+  const quizIdRef = useRef(id);
+  quizIdRef.current = id;
+
   useEffect(() => {
     const drop = () => {
       if (pendingImport.current) discardImport(pendingImport.current);
       pendingImport.current = null;
+      const token = getToken();
+      for (const url of unsavedUploads.current) {
+        const file = url.split("/").pop();
+        if (!quizIdRef.current || !file) continue;
+        // The server keeps the file if the saved quiz (or an assignment) still uses it.
+        void fetch(`/api/quizzes/${quizIdRef.current}/images/${file}`, {
+          method: "DELETE",
+          keepalive: true,
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        }).catch(() => {});
+      }
+      unsavedUploads.current.clear();
     };
     window.addEventListener("pagehide", drop);
     return () => {
@@ -120,6 +137,23 @@ export default function Editor() {
       drop();
     };
   }, []);
+
+  /** Store a photo from the user's device (max 1 MB) and return its URL. */
+  async function uploadPhoto(file: File): Promise<string> {
+    if (id) {
+      const r = await apiUpload<{ url: string }>(`/api/quizzes/${id}/images`, file);
+      unsavedUploads.current.add(r.url);
+      return r.url;
+    }
+    // A new quiz: the first photo reserves the quiz's id so its pictures have a home.
+    let session = pendingImport.current;
+    if (!session) {
+      session = (await api<{ id: string }>("/api/import/session", { method: "POST" })).id;
+      pendingImport.current = session;
+      setImportId(session);
+    }
+    return (await apiUpload<{ url: string }>(`/api/import/session/${session}/images`, file)).url;
+  }
 
   function discardImported() {
     if (!confirm("Discard this imported quiz? Its images will be deleted.")) return;
@@ -255,6 +289,7 @@ export default function Editor() {
       const q = await api<Quiz>(id ? `/api/quizzes/${id}` : "/api/quizzes", { method: id ? "PUT" : "POST", body });
       if (!id) store.set(DRAFT_KEY, null);
       pendingImport.current = null; // saved: the images now belong to the quiz
+      unsavedUploads.current.clear(); // the server dropped any the save didn't use
       setImportId(null);
       navigate(`/q/${q.id}`);
     } catch (e) {
@@ -320,7 +355,12 @@ export default function Editor() {
         </label>
         <label className="field">
           <span>Cover image link (optional)</span>
-          <ImageField value={cover} onChange={setCover} placeholder="https://… (an image or GIF hosted elsewhere)" />
+          <ImageField
+            value={cover}
+            onChange={setCover}
+            onUpload={uploadPhoto}
+            placeholder="https://… (an image or GIF), or upload a photo"
+          />
         </label>
       </section>
 
@@ -404,7 +444,11 @@ export default function Editor() {
 
             {q.image_url || openImages.has(`q:${q.key}`) ? (
               <div className="image-slot">
-                <ImageField value={q.image_url ?? ""} onChange={(image_url) => update(i, { image_url })} />
+                <ImageField
+                  value={q.image_url ?? ""}
+                  onChange={(image_url) => update(i, { image_url })}
+                  onUpload={uploadPhoto}
+                />
                 <button
                   className="link-btn"
                   onClick={() => {
@@ -516,7 +560,12 @@ export default function Editor() {
                   )}
                 </div>
                 {showImg && (
-                  <ImageField compact value={a.image_url ?? ""} onChange={(image_url) => setAnswer({ image_url })} />
+                  <ImageField
+                    compact
+                    value={a.image_url ?? ""}
+                    onChange={(image_url) => setAnswer({ image_url })}
+                    onUpload={uploadPhoto}
+                  />
                 )}
                 </div>
                 );

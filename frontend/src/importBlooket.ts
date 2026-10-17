@@ -23,6 +23,15 @@ const isSet=o=>o&&typeof o==="object"&&Array.isArray(o.questions)&&o.questions.s
 const find=(o,d,seen)=>{if(!o||typeof o!=="object"||d>9||seen.has(o)||o.nodeType)return null;seen.add(o);if(isSet(o))return o;
 for(const k in o){if(/^(_owner|return|child|sibling|alternate|stateNode|_debug)/.test(k))continue;let v;try{v=o[k];}catch(e){continue;}const f=find(v,d+1,seen);if(f)return f;}return null;};
 let data=null;
+const show=(title,text,copied)=>{const old=document.getElementById("ps-bk");if(old)old.remove();
+const el=(tag,css,txt)=>{const x=document.createElement(tag);x.style.cssText="all:initial;box-sizing:border-box;font-family:system-ui,-apple-system,sans-serif;"+css;if(txt!=null)x.textContent=txt;return x;};
+const d=el("div","position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;");d.id="ps-bk";
+const b=el("div","display:block;background:#fff;color:#17140f;padding:22px;border-radius:14px;border:3px solid #17140f;width:min(640px,92vw);");
+const h=el("div","display:block;font-size:18px;font-weight:700;color:#17140f;margin-bottom:12px;line-height:1.35;",title);
+const t=el("textarea","display:block;width:100%;height:170px;border:2px solid #17140f;border-radius:8px;padding:8px;font:12px/1.4 ui-monospace,Menlo,monospace;color:#17140f;background:#f6f2e9;white-space:pre-wrap;overflow:auto;");t.value=text;t.readOnly=true;
+const btn=(label,bg,fn)=>{const x=el("button","display:inline-block;cursor:pointer;margin:14px 10px 0 0;padding:10px 18px;border-radius:8px;border:2px solid #17140f;background:"+bg+";color:"+(bg==="#fff"?"#17140f":"#fff")+";font-size:15px;font-weight:700;",label);x.onclick=fn;return x;};
+const c=btn(copied?"Copied ✓ (copy again)":"Copy","#f26a1b",async()=>{try{await navigator.clipboard.writeText(text);}catch(e){t.focus();t.select();try{document.execCommand("copy");}catch(e2){}}c.textContent="Copied ✓";});
+b.append(h,t,c,btn("Close","#fff",()=>d.remove()));d.append(b);document.body.append(d);t.focus();t.select();};
 const urls=[...new Set(performance.getEntriesByType("resource").map(e=>e.name))].filter(u=>/blooket\\.com/.test(u)&&!/\\.(js|mjs|css|png|jpe?g|gif|svg|webp|woff2?|ttf|mp3|mp4|ico)(\\?|$)/i.test(u)).sort((a,b)=>(b.includes(id)?1:0)-(a.includes(id)?1:0));
 for(const u of urls.slice(0,25)){try{const r=await fetch(u,{credentials:"include"});if(!r.ok){errs.push(short(u)+" "+r.status);continue;}
 const t=await r.text();let j;try{j=JSON.parse(t);}catch(e){continue;}data=find(j,0,new Set());if(data)break;errs.push(short(u)+" no questions");}catch(e){errs.push(short(u)+" "+e.message);}}
@@ -31,12 +40,11 @@ if(el){let f=el[Object.keys(el).find(k=>k.startsWith("__reactFiber$"))];while(f&
 const stack=[f],seen=new Set();let n=0;while(stack.length&&n<30000&&!data){const x=stack.pop();n++;if(!x)continue;
 for(const v of[x.memoizedProps,x.memoizedState]){data=find(v,0,seen);if(data)break;}if(x.child)stack.push(x.child);if(x.sibling)stack.push(x.sibling);}
 if(!data)errs.push("react: no questions ("+n+" nodes)");}else errs.push("react: not found");}
-if(!data){prompt("Couldn't read this set. Copy these details and send them to your PleaseStudy admin:","v2 | "+urls.length+" requests | "+errs.join(" | "));return;}
+if(!data){show("Couldn't read this set. Copy these details and send them to your PleaseStudy admin:","v3 | "+urls.length+" requests | "+errs.join(" | "),false);return;}
 const text=JSON.stringify({pleasestudy:"blooket",id:id,data:data},(k,v)=>k.startsWith("_")&&k!=="_id"?undefined:v);
-const n=data.questions.length;
-try{await navigator.clipboard.writeText(text);alert("Copied "+n+" questions! Go back to PleaseStudy, open Import quiz → Blooket → Copy bookmark, and paste.");}
-catch(e){const t=document.createElement("textarea");t.value=text;t.style.cssText="position:fixed;inset:10%;z-index:2147483647;width:80%;height:80%";document.body.appendChild(t);t.select();
-alert("Press Ctrl+C (Cmd+C on Mac) to copy the selected text, then paste it into PleaseStudy. Click OK to close.");t.remove();}
+const n=data.questions.length;let copied=false;
+try{await navigator.clipboard.writeText(text);copied=true;}catch(e){}
+show(copied?"Copied "+n+" questions! Go back to PleaseStudy (Import quiz → Blooket → Copy bookmark) and paste.":"Found "+n+" questions. Click Copy, then paste it into PleaseStudy (Import quiz → Blooket → Copy bookmark).",text,copied);
 })()`;
 
 export const BLOOKET_BOOKMARKLET = "javascript:" + encodeURIComponent(BOOKMARKLET_SRC.replace(/\n/g, ""));

@@ -114,6 +114,11 @@ async fn main() {
         .route("/api/import/session", post(media::start_session))
         .route("/api/import/session/:id", axum::routing::delete(media::discard_session))
         .route(
+            "/api/quizzes/:id/images",
+            put(media::upload_quiz_image).layer(DefaultBodyLimit::max(media::MAX_UPLOAD_BYTES + 64 * 1024)),
+        )
+        .route("/api/quizzes/:id/images/:file", axum::routing::delete(media::delete_quiz_image))
+        .route(
             "/api/import/session/:id/images",
             put(media::upload_image).layer(DefaultBodyLimit::max(media::MAX_UPLOAD_BYTES + 64 * 1024)),
         )

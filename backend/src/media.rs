@@ -1,7 +1,9 @@
-//! Images stored on our server — only ever created by importing a Blooket answer-key PDF.
+//! Images stored on our server: photos creators upload to their quiz (max 1 MB each) and pictures
+//! cropped out of an imported Blooket answer-key PDF. Nothing else can store files.
 //!
-//! Flow: the editor opens an *import session*, which reserves the quiz id the quiz will get when
-//! saved. Each picture cropped out of the PDF is uploaded to the session, re-encoded here as a
+//! Flow for a quiz that isn't saved yet: the editor opens an *upload session*, which reserves the
+//! quiz id the quiz will get when saved. A saved quiz uploads straight into its own folder.
+//! Every picture is uploaded to the session or quiz, re-encoded here as a
 //! compressed WebP (max 1280px) and stored at `<IMAGES_DIR>/<quiz id>/<random>.webp`, served as
 //! `/images/<quiz id>/<random>.webp`. Quizzes may only reference files in their own folder.
 //!
@@ -37,7 +39,10 @@ use crate::{
 /// Unsaved imports are thrown away after this long.
 const SESSION_TTL_SECS: i64 = 24 * 3600;
 const MAX_ACTIVE_SESSIONS: i64 = 3;
-pub const MAX_UPLOAD_BYTES: usize = 12 * 1024 * 1024;
+/// Per photo, as uploaded (it's then re-encoded smaller).
+pub const MAX_UPLOAD_BYTES: usize = 1024 * 1024;
+/// The sweep leaves recent unsaved uploads alone, so it never pulls a photo from under someone editing.
+const SWEEP_GRACE_SECS: u64 = 12 * 3600;
 const MAX_IMAGES_PER_QUIZ: usize = 150;
 const MAX_QUIZ_BYTES: u64 = 40 * 1024 * 1024;
 const MAX_SIDE: u32 = 1280;
@@ -93,16 +98,17 @@ fn session_active(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
 
 /// Delete stored images nothing refers to any more; remove the folder once it's empty.
 pub fn gc(images_dir: &Path, conn: &Connection, quiz_id: &str) {
-    if let Err(e) = gc_inner(images_dir, conn, quiz_id) {
+    gc_older_than(images_dir, conn, quiz_id, 0);
+}
+
+/// Like `gc`, but only removes unused files at least `min_age_secs` old.
+fn gc_older_than(images_dir: &Path, conn: &Connection, quiz_id: &str, min_age_secs: u64) {
+    if let Err(e) = gc_inner(images_dir, conn, quiz_id, min_age_secs) {
         tracing::warn!("image cleanup for {quiz_id} failed: {e}");
     }
 }
 
-fn gc_inner(images_dir: &Path, conn: &Connection, quiz_id: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let dir = quiz_dir(images_dir, quiz_id);
-    if !dir.is_dir() || session_active(conn, quiz_id)? {
-        return Ok(()); // an import in progress may still use any of its files
-    }
+fn referenced(conn: &Connection, quiz_id: &str) -> rusqlite::Result<HashSet<String>> {
     let mut keep = HashSet::new();
     let mut collect = |cover: Option<String>, questions: &str| {
         let qs: Vec<Question> = serde_json::from_str(questions).unwrap_or_default();
@@ -127,10 +133,20 @@ fn gc_inner(images_dir: &Path, conn: &Connection, quiz_id: &str) -> Result<(), B
     for qs in stmt.query_map([quiz_id], |r| r.get::<_, String>(0))? {
         collect(None, &qs?);
     }
+    Ok(keep)
+}
+
+fn gc_inner(images_dir: &Path, conn: &Connection, quiz_id: &str, min_age_secs: u64) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = quiz_dir(images_dir, quiz_id);
+    if !dir.is_dir() || session_active(conn, quiz_id)? {
+        return Ok(()); // an unsaved quiz may still use any of its files
+    }
+    let keep = referenced(conn, quiz_id)?;
     for entry in std::fs::read_dir(&dir)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
-        if !keep.contains(&name) {
+        let age = entry.metadata()?.modified()?.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+        if !keep.contains(&name) && age >= min_age_secs {
             let _ = std::fs::remove_file(entry.path());
         }
     }
@@ -161,7 +177,7 @@ pub fn sweep(state: &Shared) {
     let Ok(dirs) = std::fs::read_dir(&state.images_dir) else { return };
     for d in dirs.flatten() {
         if d.path().is_dir() {
-            gc(&state.images_dir, &conn, &d.file_name().to_string_lossy());
+            gc_older_than(&state.images_dir, &conn, &d.file_name().to_string_lossy(), SWEEP_GRACE_SECS);
         }
     }
 }
@@ -225,7 +241,7 @@ fn to_webp(bytes: &[u8]) -> ApiResult<Vec<u8>> {
         .with_guessed_format()
         .map_err(|_| ApiError::bad("Couldn't read that image"))?;
     if !matches!(reader.format(), Some(ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP)) {
-        return Err(ApiError::bad("Images must be PNG, JPEG or WebP"));
+        return Err(ApiError::bad("Only photos can be uploaded: PNG, JPEG or WebP"));
     }
     let mut limits = Limits::default();
     limits.max_image_width = Some(10_000);
@@ -243,25 +259,69 @@ fn to_webp(bytes: &[u8]) -> ApiResult<Vec<u8>> {
     Ok(encoded.to_vec())
 }
 
+/// Upload into an unsaved quiz's session (photos, or pictures from an imported PDF).
 pub async fn upload_image(
     State(state): State<Shared>,
     AuthUser(user): AuthUser,
     UrlPath(id): UrlPath<String>,
     body: Bytes,
 ) -> ApiResult<Json<Value>> {
-    if body.len() > MAX_UPLOAD_BYTES {
-        return Err(ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "That image is too big"));
-    }
     {
         let conn = state.db.lock().unwrap();
         own_session(&conn, &user, &id)?;
     }
-    let dir = quiz_dir(&state.images_dir, &id);
+    store_image(&state, &id, body).await
+}
+
+/// Upload a photo into a saved quiz you own. It's only kept if a save ends up using it.
+pub async fn upload_quiz_image(
+    State(state): State<Shared>,
+    AuthUser(user): AuthUser,
+    UrlPath(id): UrlPath<String>,
+    body: Bytes,
+) -> ApiResult<Json<Value>> {
+    {
+        let conn = state.db.lock().unwrap();
+        if !crate::quizzes::load(&conn, &id)?.can_edit(Some(&user)) {
+            return Err(ApiError::forbidden());
+        }
+    }
+    store_image(&state, &id, body).await
+}
+
+/// Remove a photo uploaded while editing that won't be saved (e.g. the editor was closed).
+/// Files the saved quiz or an assignment still uses are kept.
+pub async fn delete_quiz_image(
+    State(state): State<Shared>,
+    AuthUser(user): AuthUser,
+    UrlPath((id, file)): UrlPath<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    let conn = state.db.lock().unwrap();
+    if !crate::quizzes::load(&conn, &id)?.can_edit(Some(&user)) {
+        return Err(ApiError::forbidden());
+    }
+    let url = format!("/images/{id}/{file}");
+    let Some((_, file)) = parse_local(&url) else { return Err(ApiError::not_found("Image")) };
+    if !referenced(&conn, &id)?.contains(file) {
+        let _ = std::fs::remove_file(quiz_dir(&state.images_dir, &id).join(file));
+        let dir = quiz_dir(&state.images_dir, &id);
+        if std::fs::read_dir(&dir).map(|mut d| d.next().is_none()).unwrap_or(false) {
+            let _ = std::fs::remove_dir(&dir);
+        }
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn store_image(state: &Shared, id: &str, body: Bytes) -> ApiResult<Json<Value>> {
+    if body.len() > MAX_UPLOAD_BYTES {
+        return Err(ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "Photos can be at most 1 MB"));
+    }
+    let dir = quiz_dir(&state.images_dir, id);
     let (count, total) = std::fs::read_dir(&dir)
         .map(|rd| rd.flatten().fold((0usize, 0u64), |(n, b), e| (n + 1, b + e.metadata().map(|m| m.len()).unwrap_or(0))))
         .unwrap_or((0, 0));
     if count >= MAX_IMAGES_PER_QUIZ || total >= MAX_QUIZ_BYTES {
-        return Err(ApiError::too_many("This import already has as many images as it can hold"));
+        return Err(ApiError::too_many("This quiz already has as many uploaded images as it can hold"));
     }
     // Image work is CPU-heavy; keep it off the async threads.
     let webp = tokio::task::spawn_blocking(move || to_webp(&body)).await.map_err(ApiError::internal)??;

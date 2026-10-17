@@ -244,7 +244,7 @@ pub async fn create(
         Some(imp) if media::claim_session(&conn, &user, &imp)? => imp,
         Some(_) => {
             return Err(ApiError::bad(
-                "This import expired, so its images were removed. Import the PDF again.",
+                "This draft was open too long, so its uploaded images were removed. Add them again and save.",
             ))
         }
         None => util::short_id(8),

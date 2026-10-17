@@ -321,13 +321,20 @@ async function cropImages(doc: unknown, images: PdfImage[]): Promise<Map<string,
       const w = Math.min(canvas.width - x, Math.ceil(Math.abs(x2 - x1)));
       const h = Math.min(canvas.height - y, Math.ceil(Math.abs(y2 - y1)));
       if (w < 8 || h < 8) continue;
+      // Uploads are capped at 1 MB: shrink to the size the server keeps anyway (1280px), then use a
+      // PNG if it fits (crisp for diagrams), otherwise a JPEG. The server re-encodes it as WebP.
+      const fit = Math.min(1, 1280 / Math.max(w, h));
       const crop = document.createElement("canvas");
-      crop.width = w;
-      crop.height = h;
-      crop.getContext("2d")!.drawImage(canvas, x, y, w, h, 0, 0, w, h);
-      // PNG keeps it lossless; the server re-encodes it as a compressed WebP.
-      const blob = await new Promise<Blob | null>((res) => crop.toBlob(res, "image/png"));
-      if (blob) blobs.set(img.key, blob);
+      crop.width = Math.max(1, Math.round(w * fit));
+      crop.height = Math.max(1, Math.round(h * fit));
+      crop.getContext("2d")!.drawImage(canvas, x, y, w, h, 0, 0, crop.width, crop.height);
+      const encode = (type: string, q?: number) => new Promise<Blob | null>((res) => crop.toBlob(res, type, q));
+      let blob = await encode("image/png");
+      for (const q of [0.9, 0.8, 0.65]) {
+        if (blob && blob.size <= 1024 * 1024) break;
+        blob = await encode("image/jpeg", q);
+      }
+      if (blob && blob.size <= 1024 * 1024) blobs.set(img.key, blob);
     }
     canvas.width = canvas.height = 0;
   }
