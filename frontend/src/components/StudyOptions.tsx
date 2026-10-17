@@ -19,8 +19,11 @@ export default function StudyOptions({
   autoAdvance,
   onAutoAdvance,
   hidePartial,
+  hideShuffle,
 }: {
   hidePartial?: boolean;
+  /** For screens that show the shuffle switches in their own section. */
+  hideShuffle?: boolean;
   value: StudySettings;
   onChange: (s: StudySettings) => void;
   autoAdvance?: boolean;
@@ -67,17 +70,21 @@ export default function StudyOptions({
         label="Read-the-question countdown"
         hint="Show the question alone before the answers appear"
       />
-      <Toggle
-        checked={value.shuffle_questions}
-        onChange={(shuffle_questions) => set({ shuffle_questions })}
-        label="Shuffle question order"
-      />
-      <Toggle
-        checked={value.shuffle_answers}
-        onChange={(shuffle_answers) => set({ shuffle_answers })}
-        label="Shuffle answer order"
-        hint="So you learn the answer, not its position"
-      />
+      {!hideShuffle && (
+        <>
+          <Toggle
+            checked={value.shuffle_questions}
+            onChange={(shuffle_questions) => set({ shuffle_questions })}
+            label="Shuffle question order"
+          />
+          <Toggle
+            checked={value.shuffle_answers}
+            onChange={(shuffle_answers) => set({ shuffle_answers })}
+            label="Shuffle answer order"
+            hint="So you learn the answer, not its position"
+          />
+        </>
+      )}
       {!hidePartial && (
         <PartialCreditField value={value.multi_partial} onChange={(multi_partial) => set({ multi_partial })} />
       )}

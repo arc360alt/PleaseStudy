@@ -210,6 +210,7 @@ function HostSetup({ quiz, onClose }: { quiz: Quiz; onClose: () => void }) {
   const [timeLimit, setTimeLimit] = useState(0);
   const [readSeconds, setReadSeconds] = useState(5);
   const [shuffle, setShuffle] = useState(false);
+  const [shuffleAnswers, setShuffleAnswers] = useState(false);
   const [lateJoin, setLateJoin] = useState(true);
   const [partial, setPartial] = useState<PartialCredit>("none");
   const [busy, setBusy] = useState(false);
@@ -227,6 +228,7 @@ function HostSetup({ quiz, onClose }: { quiz: Quiz; onClose: () => void }) {
             no_timer: timeLimit === -1,
             read_seconds: readSeconds,
             shuffle_questions: shuffle,
+            shuffle_answers: shuffleAnswers,
             allow_late_join: lateJoin,
             multi_partial: partial,
           },
@@ -283,6 +285,12 @@ function HostSetup({ quiz, onClose }: { quiz: Quiz; onClose: () => void }) {
         </label>
       </div>
       <Toggle checked={shuffle} onChange={setShuffle} label="Shuffle question order" />
+      <Toggle
+        checked={shuffleAnswers}
+        onChange={setShuffleAnswers}
+        label="Shuffle answer order"
+        hint="Mixes up which colored box each answer is in, so it's different every game"
+      />
       <Toggle
         checked={lateJoin}
         onChange={setLateJoin}
@@ -367,13 +375,26 @@ function AssignSetup({ quiz, onClose }: { quiz: Quiz; onClose: () => void }) {
         label="Require an account"
         hint="One attempt per person. Otherwise anyone can play by typing a name."
       />
+      <h3 className="options-head">Order</h3>
+      <Toggle
+        checked={settings.shuffle_questions}
+        onChange={(shuffle_questions) => setSettings({ ...settings, shuffle_questions })}
+        label="Shuffle question order"
+        hint="Each student gets the questions in a different order"
+      />
+      <Toggle
+        checked={settings.shuffle_answers}
+        onChange={(shuffle_answers) => setSettings({ ...settings, shuffle_answers })}
+        label="Shuffle answer order"
+        hint="Mixes up which colored box each answer is in, different for every student"
+      />
       <h3 className="options-head">Scoring</h3>
       <PartialCreditField
         value={settings.multi_partial}
         onChange={(multi_partial) => setSettings({ ...settings, multi_partial })}
       />
       <h3 className="options-head">How it plays</h3>
-      <StudyOptions value={settings} onChange={setSettings} hidePartial />
+      <StudyOptions value={settings} onChange={setSettings} hidePartial hideShuffle />
       <p className="muted small-print">Grades only count each student's first try at every question.</p>
       {error && <div className="alert">{error}</div>}
       <button className="btn btn-primary btn-lg btn-block" onClick={create} disabled={busy}>

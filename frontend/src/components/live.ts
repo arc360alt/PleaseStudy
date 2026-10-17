@@ -34,6 +34,7 @@ export type HostState = {
     time_limit: number | null;
     read_seconds: number;
     shuffle_questions: boolean;
+    shuffle_answers?: boolean;
     allow_late_join: boolean;
     no_timer: boolean;
     multi_partial?: "none" | "at_least_half" | "more_than_half";

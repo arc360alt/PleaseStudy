@@ -66,6 +66,9 @@ pub struct Settings {
     pub read_seconds: u32,
     #[serde(default)]
     pub shuffle_questions: bool,
+    /// Shuffle the box order within each question, so repeat games aren't memorised by position.
+    #[serde(default)]
+    pub shuffle_answers: bool,
     #[serde(default = "default_true")]
     pub allow_late_join: bool,
     /// No countdown on answering: the round only ends when everyone has answered
@@ -520,6 +523,7 @@ pub async fn create(
         time_limit: None,
         read_seconds: default_read(),
         shuffle_questions: false,
+        shuffle_answers: false,
         allow_late_join: true,
         no_timer: false,
         multi_partial: PartialCredit::None,
@@ -528,8 +532,15 @@ pub async fn create(
     settings.time_limit = settings.time_limit.map(|t| t.clamp(crate::models::MIN_TIME, crate::models::MAX_TIME));
 
     let mut questions = quiz.questions;
+    let mut rng = rand::thread_rng();
     if settings.shuffle_questions {
-        questions.shuffle(&mut rand::thread_rng());
+        questions.shuffle(&mut rng);
+    }
+    // Shuffled once per game so the host screen and every player see the same layout.
+    if settings.shuffle_answers {
+        for q in questions.iter_mut().filter(|q| q.kind != QuestionKind::Text) {
+            q.answers.shuffle(&mut rng);
+        }
     }
 
     let mut games = state.games.games.lock().unwrap();
