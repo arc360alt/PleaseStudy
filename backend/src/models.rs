@@ -268,7 +268,9 @@ pub fn clean_url(url: Option<String>, field: &str) -> ApiResult<Option<String>> 
     if url.len() > 2000 {
         return Err(ApiError::bad(format!("{field} is too long")));
     }
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
+    // Our own stored images (from PDF imports) are allowed; which quiz may use them is checked on save.
+    let ours = crate::media::parse_local(&url).is_some();
+    if !(ours || url.starts_with("https://") || url.starts_with("http://")) {
         return Err(ApiError::bad(format!("{field} must start with http:// or https://")));
     }
     Ok(Some(url))

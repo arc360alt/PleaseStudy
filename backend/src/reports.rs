@@ -252,6 +252,7 @@ fn check_target(actor: &User, conn: &Connection, target: i64) -> ApiResult<Strin
 
 /// Performs one staff action. Returns a short description for the report log.
 fn apply_action(
+    images_dir: &std::path::Path,
     conn: &Connection,
     actor: &User,
     target_user: Option<i64>,
@@ -299,6 +300,7 @@ fn apply_action(
             need_message()?;
             let quiz = need_quiz()?;
             conn.execute("DELETE FROM quizzes WHERE id = ?1", [&quiz.summary.id])?;
+            crate::media::gc(images_dir, conn, &quiz.summary.id);
             notify(
                 conn,
                 quiz.summary.owner_id,
@@ -410,7 +412,7 @@ pub async fn resolve(
         "user" => (body.target_id.parse().ok(), None),
         _ => return Err(ApiError::bad("Unknown report type")),
     };
-    let resolution = apply_action(&conn, &user, target_user, quiz_id, &body.action)?;
+    let resolution = apply_action(&state.images_dir, &conn, &user, target_user, quiz_id, &body.action)?;
     close_reports(&conn, &user, &body.kind, &body.target_id, &body.action.action, &resolution)?;
     Ok(Json(json!({ "ok": true, "resolution": resolution })))
 }
@@ -423,7 +425,7 @@ pub async fn user_action(
     Json(body): Json<ActionBody>,
 ) -> ApiResult<Json<Value>> {
     let conn = state.db.lock().unwrap();
-    let resolution = apply_action(&conn, &user, Some(id), None, &body)?;
+    let resolution = apply_action(&state.images_dir, &conn, &user, Some(id), None, &body)?;
     if body.action != "unban" {
         close_reports(&conn, &user, "user", &id.to_string(), &body.action, &resolution)?;
     }

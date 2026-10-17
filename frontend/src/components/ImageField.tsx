@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, errorText } from "../api";
+import { api, errorText, isImageLink } from "../api";
 import Modal from "./Modal";
 
 type Gif = { id: number | string; title: string; preview: string; url: string; width: number; height: number };
@@ -30,7 +30,7 @@ export default function ImageField({
   useEffect(() => {
     gifsEnabled().then(setEnabled);
   }, []);
-  const valid = /^https?:\/\//.test(value.trim());
+  const valid = isImageLink(value);
 
   return (
     <div className={`image-field ${compact ? "compact" : ""}`}>

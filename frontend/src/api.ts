@@ -296,3 +296,19 @@ export async function apiUpload<T>(path: string, file: Blob, method = "PUT"): Pr
   if (!res.ok) throw new ApiError(data.error ?? (res.status === 413 ? "That file is too big (max 1 MB)" : `Upload failed (${res.status})`), res.status);
   return data as T;
 }
+
+/** Image links a quiz may use: web links, or images this server stored from a PDF import. */
+export const isImageLink = (u: string) => /^https?:\/\//.test(u.trim()) || u.trim().startsWith("/images/");
+
+/**
+ * Throw away an unsaved PDF import and its stored images. Uses keepalive so it still
+ * goes through when the page is closing.
+ */
+export function discardImport(importId: string) {
+  const token = getToken();
+  void fetch(`/api/import/session/${encodeURIComponent(importId)}`, {
+    method: "DELETE",
+    keepalive: true,
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  }).catch(() => {});
+}

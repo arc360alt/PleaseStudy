@@ -183,6 +183,7 @@ pub async fn delete(
     }
     conn.execute("DELETE FROM attempts WHERE assignment_code = ?1", [&code])?;
     conn.execute("DELETE FROM assignments WHERE code = ?1", [&code])?;
+    crate::media::gc(&state.images_dir, &conn, &a.quiz_id); // pictures only this assignment still used
     Ok(Json(json!({ "ok": true })))
 }
 

@@ -117,6 +117,14 @@ pub fn open(path: &str) -> rusqlite::Result<Connection> {
     add_column(&conn, "users", "last_submit_at", "INTEGER")?;
     add_column(&conn, "users", "display_name", "TEXT")?;
     add_column(&conn, "users", "username_changed_at", "INTEGER")?;
+    // A PDF import in progress: reserves the id its quiz will be saved under (see media.rs).
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS import_sessions (
+            id         TEXT PRIMARY KEY,
+            owner_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at INTEGER NOT NULL
+        );",
+    )?;
     // A username someone just moved away from stays reserved for them for a while,
     // so nobody else can grab it and impersonate them.
     conn.execute_batch(

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, errorText, type Question } from "../api";
+import { api, apiUpload, errorText, type Question } from "../api";
 import { importSpreadsheet, templateCsv } from "../importCsv";
 import { BLOOKET_BOOKMARKLET, importBlooket } from "../importBlooket";
 import Modal from "./Modal";
@@ -8,6 +8,9 @@ export type ImportResult = {
   quiz: { title: string; description: string; cover_url: string | null; questions: Question[] };
   /** Link back to where it came from, if it was online. */
   source: string | null;
+  /** PDF imports with pictures: the import session holding them (and the quiz id it will get). */
+  importId?: string;
+  imagesSaved?: number;
   sourceLabel: string;
   imported: number;
   total: number;
@@ -110,6 +113,7 @@ function BlooketTab({ onImported }: { onImported: (r: ImportResult) => void }) {
 
 function BlooketPdf({ onImported }: { onImported: (r: ImportResult) => void }) {
   const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -119,13 +123,44 @@ function BlooketPdf({ onImported }: { onImported: (r: ImportResult) => void }) {
     if (f.size > 20 * 1024 * 1024) return setError("That PDF is too big (max 20 MB).");
     setBusy(true);
     try {
-      const { readBlooketPdf } = await import("../importBlooketPdf");
+      const { readBlooketPdf, PDF_IMAGE_PREFIX } = await import("../importBlooketPdf");
       const r = await readBlooketPdf(f);
+      let importId: string | undefined;
+      let imagesSaved = 0;
+      const urls = new Map<string, string>();
+      if (r.images.size) {
+        setStatus(`Saving ${r.images.size} picture${r.images.size === 1 ? "" : "s"}…`);
+        importId = (await api<{ id: string }>("/api/import/session", { method: "POST" })).id;
+        let n = 0;
+        for (const [key, blob] of r.images) {
+          setStatus(`Saving pictures ${++n}/${r.images.size}…`);
+          try {
+            const up = await apiUpload<{ url: string }>(`/api/import/session/${importId}/images`, blob);
+            urls.set(key, up.url);
+            imagesSaved++;
+          } catch {
+            /* a picture that fails to save is just left out */
+          }
+        }
+      }
+      const resolve = (u: string | null | undefined) =>
+        u?.startsWith(PDF_IMAGE_PREFIX) ? (urls.get(u.slice(PDF_IMAGE_PREFIX.length)) ?? null) : (u ?? null);
+      r.questions = r.questions
+        .map((q) => ({
+          ...q,
+          image_url: resolve(q.image_url),
+          answers: q.answers
+            .map((a) => ({ ...a, image_url: resolve(a.image_url) }))
+            .filter((a) => a.text || a.image_url),
+        }))
+        .filter((q) => q.kind === "text" || q.answers.length >= 2);
       const fromName = f.name.replace(/\.pdf$/i, "").replace(/\s*\|\s*Blooket\s*$/i, "").trim();
       onImported({
         quiz: { title: (fromName || r.title || "Imported from Blooket").slice(0, 120), description: r.description, cover_url: null, questions: r.questions },
         source: null,
         sourceLabel: "the Blooket answer key",
+        importId,
+        imagesSaved,
         imported: r.questions.length,
         total: r.total,
         skipped: r.skipped,
@@ -134,6 +169,7 @@ function BlooketPdf({ onImported }: { onImported: (r: ImportResult) => void }) {
       setError(errorText(err));
     } finally {
       setBusy(false);
+      setStatus("");
       if (fileInput.current) fileInput.current.value = "";
     }
   }
@@ -151,11 +187,11 @@ function BlooketPdf({ onImported }: { onImported: (r: ImportResult) => void }) {
       </ol>
       <input ref={fileInput} type="file" accept="application/pdf,.pdf" hidden onChange={(e) => pick(e.target.files?.[0])} />
       <button type="button" className="btn btn-primary btn-lg btn-block" disabled={busy} onClick={() => fileInput.current?.click()}>
-        {busy ? "Reading PDF…" : "Choose answer key PDF"}
+        {busy ? status || "Reading PDF…" : "Choose answer key PDF"}
       </button>
       <small className="muted">
-        The PDF is read on your device, not uploaded. Time limits and pictures aren't in the printout, so questions
-        get 20 seconds each and no images. Use the bookmark if you need those.
+        The PDF is read on your device. Pictures in it are saved with your quiz (as compressed images); if you leave
+        without saving, they're deleted. Time limits aren't in the printout, so questions get 20 seconds each.
       </small>
       {error && <div className="alert">{error}</div>}
     </div>
@@ -342,7 +378,15 @@ function SheetTab({ onImported }: { onImported: (r: ImportResult) => void }) {
   );
 }
 
-export function ImportSummary({ result, onDismiss }: { result: ImportResult; onDismiss: () => void }) {
+export function ImportSummary({
+  result,
+  onDismiss,
+  onDiscard,
+}: {
+  result: ImportResult;
+  onDismiss: () => void;
+  onDiscard?: () => void;
+}) {
   return (
     <div className="panel import-summary">
       <div>
@@ -357,7 +401,20 @@ export function ImportSummary({ result, onDismiss }: { result: ImportResult; onD
           )}
           .
         </strong>{" "}
+        {!!result.imagesSaved && (
+          <>
+            {result.imagesSaved} picture{result.imagesSaved === 1 ? "" : "s"} saved with it.{" "}
+          </>
+        )}
         Check everything over (including the title), then save. It stays private until you submit it for review.
+        {onDiscard && (
+          <>
+            {" "}
+            <button className="link-btn" onClick={onDiscard}>
+              Discard import
+            </button>
+          </>
+        )}
         {result.skipped.length > 0 && (
           <details>
             <summary>{result.skipped.length} skipped</summary>

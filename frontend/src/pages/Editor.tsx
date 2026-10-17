@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { api, errorText, store, type Question, type QuestionKind, type Quiz } from "../api";
+import { api, discardImport, errorText, isImageLink, store, type Question, type QuestionKind, type Quiz } from "../api";
 import { useAuth } from "../auth";
 import ImageField from "../components/ImageField";
 import ImportKahoot, { ImportSummary, type ImportResult } from "../components/ImportKahoot";
@@ -68,11 +68,11 @@ function problems(title: string, questions: EditQuestion[]): string[] {
     if (q.answers.some((a) => !a.text.trim() && !a.image_url?.trim()))
       out.push(`Question ${n} has an answer with no text or image.`);
     q.answers.forEach((a, j) => {
-      if (a.image_url?.trim() && !/^https?:\/\//.test(a.image_url.trim()))
+      if (a.image_url?.trim() && !isImageLink(a.image_url))
         out.push(`Question ${n}, answer ${j + 1}: image link should start with https://`);
     });
     if (!q.answers.some((a) => a.correct)) out.push(`Question ${n} needs a correct answer.`);
-    if (q.image_url && !/^https?:\/\//.test(q.image_url.trim())) out.push(`Question ${n}'s image link should start with https://`);
+    if (q.image_url && !isImageLink(q.image_url)) out.push(`Question ${n}'s image link should start with https://`);
   });
   return out;
 }
@@ -104,7 +104,39 @@ export default function Editor() {
   const [importing, setImporting] = useState(false);
   const [imported, setImported] = useState<ImportResult | null>(null);
 
+  // A PDF import stores its pictures on the server under a reserved quiz id. Until the quiz is
+  // saved, leaving the editor (or discarding) deletes them again.
+  const [importId, setImportId] = useState<string | null>(null);
+  const pendingImport = useRef<string | null>(null);
+  pendingImport.current = importId;
+  useEffect(() => {
+    const drop = () => {
+      if (pendingImport.current) discardImport(pendingImport.current);
+      pendingImport.current = null;
+    };
+    window.addEventListener("pagehide", drop);
+    return () => {
+      window.removeEventListener("pagehide", drop);
+      drop();
+    };
+  }, []);
+
+  function discardImported() {
+    if (!confirm("Discard this imported quiz? Its images will be deleted.")) return;
+    if (importId) discardImport(importId);
+    pendingImport.current = null;
+    setImportId(null);
+    setImported(null);
+    setTitle("");
+    setDescription("");
+    setCover("");
+    setQuestions([blankQuestion()]);
+    store.set(DRAFT_KEY, null);
+  }
+
   function applyImport(r: ImportResult) {
+    if (importId && importId !== r.importId) discardImport(importId); // replacing an earlier PDF import
+    setImportId(r.importId ?? null);
     setTitle(r.quiz.title);
     setDescription(r.quiz.description);
     setCover(r.quiz.cover_url ?? "");
@@ -158,13 +190,14 @@ export default function Editor() {
   }, [id]);
 
   useEffect(() => {
-    if (id || !loaded) return;
+    // Imports with stored images aren't kept as a local draft: leaving discards them.
+    if (id || !loaded || importId) return;
     const t = setTimeout(
       () => store.set(DRAFT_KEY, JSON.stringify({ title, description, cover, questions })),
       400,
     );
     return () => clearTimeout(t);
-  }, [id, loaded, title, description, cover, questions]);
+  }, [id, loaded, importId, title, description, cover, questions]);
 
   if (ready && !user) {
     return (
@@ -216,10 +249,13 @@ export default function Editor() {
             ? q.answers.filter((a) => a.text.trim()).map((a) => ({ text: a.text, correct: true }))
             : q.answers.map((a) => ({ ...a, image_url: a.image_url?.trim() || null })),
       })),
+      import_id: id ? undefined : importId ?? undefined,
     };
     try {
       const q = await api<Quiz>(id ? `/api/quizzes/${id}` : "/api/quizzes", { method: id ? "PUT" : "POST", body });
       if (!id) store.set(DRAFT_KEY, null);
+      pendingImport.current = null; // saved: the images now belong to the quiz
+      setImportId(null);
       navigate(`/q/${q.id}`);
     } catch (e) {
       setError(errorText(e));
@@ -238,7 +274,13 @@ export default function Editor() {
             </button>
           )}
         </div>
-        {imported && <ImportSummary result={imported} onDismiss={() => setImported(null)} />}
+        {imported && (
+          <ImportSummary
+            result={imported}
+            onDismiss={() => setImported(null)}
+            onDiscard={importId ? discardImported : undefined}
+          />
+        )}
         {importing && (
           <ImportKahoot
             onClose={() => setImporting(false)}

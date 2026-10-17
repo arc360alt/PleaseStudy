@@ -13,6 +13,12 @@ import type { CsvImport } from "./importCsv";
 /** One run of text from the PDF, in PDF points (y grows upward). */
 export type PdfItem = { str: string; x: number; y: number; w: number; h: number; font: string; page: number };
 
+/** Where a picture is drawn, in PDF points. `key` identifies it until it's uploaded. */
+export type PdfImage = { key: string; page: number; left: number; right: number; top: number; bottom: number };
+
+/** Stands in for an image URL until the picture has been uploaded. */
+export const PDF_IMAGE_PREFIX = "pdf-image:";
+
 type Segment = {
   x: number;
   y: number;
@@ -60,9 +66,44 @@ function segments(items: PdfItem[], rightCol: number | null, mid: number): Segme
   return out.map((s) => ({ ...s, text: s.text.replace(/\s+/g, " ").trim() })).filter((s) => s.text);
 }
 
-type Draft = { text: string; h: number; answers: { letter: string; text: string; boldChars: number; chars: number; col: number }[]; extra: Segment[] };
+type DraftAnswer = { letter: string; text: string; boldChars: number; chars: number; col: number; page: number; y: number; image?: string };
+type Draft = { text: string; h: number; page: number; y: number; image?: string; answers: DraftAnswer[]; extra: Segment[] };
 
-export function parseBlooketPdf(items: PdfItem[], pageWidth = 612): CsvImport & { title: string; description: string } {
+/** Is (page, y) at or above (page2, y2) in reading order? */
+const above = (page: number, y: number, page2: number, y2: number) => page < page2 || (page === page2 && y >= y2 - 2);
+
+/**
+ * Give each picture to the question it sits in: above that question's answers → the question's
+ * picture; among the answers → the answer it's under, in the same column.
+ */
+function placeImages(drafts: Draft[], images: PdfImage[], mid: number) {
+  for (const img of images) {
+    let d: Draft | undefined;
+    for (const q of drafts) if (above(q.page, q.y, img.page, img.top)) d = q;
+    if (!d) continue; // e.g. a logo above the first question
+    const firstAnswer = d.answers.reduce<DraftAnswer | null>(
+      (best, a) => (!best || above(a.page, a.y, best.page, best.y) ? a : best),
+      null,
+    );
+    const inAnswers = firstAnswer && above(firstAnswer.page, firstAnswer.y, img.page, img.top + 4);
+    if (inAnswers) {
+      const col = (img.left + img.right) / 2 < mid ? 0 : 1;
+      let target: DraftAnswer | undefined;
+      for (const a of d.answers) if (a.col === col && above(a.page, a.y, img.page, img.top + 4)) target = a;
+      if (target && !target.image) {
+        target.image = img.key;
+        continue;
+      }
+    }
+    if (!d.image) d.image = img.key;
+  }
+}
+
+export function parseBlooketPdf(
+  items: PdfItem[],
+  pageWidth = 612,
+  images: PdfImage[] = [],
+): CsvImport & { title: string; description: string } {
   // Page header/footer (date, URL, "Page 1 of 2") is set much smaller than the content.
   const content = items.filter((i) => i.str.trim() && i.h >= 9);
   const mid = pageWidth * 0.42;
@@ -100,7 +141,7 @@ export function parseBlooketPdf(items: PdfItem[], pageWidth = 612): CsvImport & 
     const col = s.x < mid ? 0 : 1;
     const q = s.x < mid && s.h >= qHeight - 0.5 ? s.text.match(qStart) : null;
     if (q && (!cur || cur.answers.length > 0 || cur.text)) {
-      cur = { text: q[2], h: s.h, answers: [], extra: [] };
+      cur = { text: q[2], h: s.h, page: s.page, y: s.y, answers: [], extra: [] };
       drafts.push(cur);
       lastAnswer[0] = lastAnswer[1] = null;
       continue;
@@ -110,7 +151,7 @@ export function parseBlooketPdf(items: PdfItem[], pageWidth = 612): CsvImport & 
     const chars = [...s.fonts.values()].reduce((a, b) => a + b, 0);
     const a = s.text.match(aStart);
     if (a && s.h < qHeight - 0.5) {
-      const ans = { letter: a[1].toLowerCase(), text: a[2], boldChars: bold, chars, col };
+      const ans: DraftAnswer = { letter: a[1].toLowerCase(), text: a[2], boldChars: bold, chars, col, page: s.page, y: s.y };
       cur.answers.push(ans);
       lastAnswer[col] = ans;
     } else if (cur.answers.length === 0 && s.h >= qHeight - 0.5) {
@@ -125,6 +166,9 @@ export function parseBlooketPdf(items: PdfItem[], pageWidth = 612): CsvImport & 
     }
   }
 
+  placeImages(drafts, images, mid);
+  const ref = (key?: string) => (key ? PDF_IMAGE_PREFIX + key : null);
+
   const questions: Question[] = [];
   const skipped: CsvImport["skipped"] = [];
   drafts.forEach((d, i) => {
@@ -138,7 +182,7 @@ export function parseBlooketPdf(items: PdfItem[], pageWidth = 612): CsvImport & 
         questions.push({
           kind: "text",
           text,
-          image_url: null,
+          image_url: ref(d.image),
           time_limit: 20,
           answers: typed.slice(0, 10).map((t) => ({ text: t.slice(0, 120), correct: true })),
         });
@@ -147,12 +191,17 @@ export function parseBlooketPdf(items: PdfItem[], pageWidth = 612): CsvImport & 
     }
     const answers: Answer[] = d.answers
       .sort((x, y) => x.letter.localeCompare(y.letter))
-      .filter((a) => a.text)
-      .map((a) => ({ text: a.text.slice(0, 120), correct: a.chars > 0 && a.boldChars / a.chars > 0.5 }));
+      .filter((a) => a.text || a.image)
+      // A picture answer's letter is still printed bold when it's correct.
+      .map((a) => ({
+        text: a.text.slice(0, 120),
+        correct: a.chars > 0 && a.boldChars / a.chars > 0.5,
+        image_url: ref(a.image),
+      }));
     if (answers.length < 2) return skipped.push({ number, reason: "fewer than 2 answers" });
     if (!answers.some((a) => a.correct)) return skipped.push({ number, reason: "no answer marked correct (bold)" });
     // Blooket: you pick one answer and any marked-correct one counts → "pick one".
-    questions.push({ kind: "single", text, image_url: null, time_limit: 20, answers: answers.slice(0, 6) });
+    questions.push({ kind: "single", text, image_url: ref(d.image), time_limit: 20, answers: answers.slice(0, 6) });
   });
 
   if (!questions.length) throw new Error("None of the questions in this PDF could be read.");
@@ -165,10 +214,56 @@ type PdfDoc = {
   getPage(n: number): Promise<{
     getViewport(o: { scale: number }): { width: number };
     getTextContent(): Promise<{ items: unknown[] }>;
-    getOperatorList(): Promise<unknown>;
+    getOperatorList(): Promise<{ fnArray: number[]; argsArray: unknown[][] }>;
     commonObjs: { get(id: string): { name?: string } | undefined };
   }>;
 };
+
+type Ops = Record<"save" | "restore" | "transform" | "paintImageXObject" | "paintInlineImageXObject" | "paintFormXObjectBegin" | "paintFormXObjectEnd", number>;
+type Matrix = [number, number, number, number, number, number];
+const mul = (m: Matrix, n: Matrix): Matrix => [
+  m[0] * n[0] + m[2] * n[1],
+  m[1] * n[0] + m[3] * n[1],
+  m[0] * n[2] + m[2] * n[3],
+  m[1] * n[2] + m[3] * n[3],
+  m[0] * n[4] + m[2] * n[5] + m[4],
+  m[1] * n[4] + m[3] * n[5] + m[5],
+];
+
+/**
+ * Where every picture is drawn, by replaying the page's drawing commands and tracking the
+ * current transform (a picture fills the unit square of the transform it's drawn with).
+ */
+export async function pdfImagePlacements(doc: PdfDoc, ops: Ops): Promise<PdfImage[]> {
+  const out: PdfImage[] = [];
+  for (let p = 1; p <= Math.min(doc.numPages, 60); p++) {
+    const page = await doc.getPage(p);
+    const { fnArray, argsArray } = await page.getOperatorList();
+    let ctm: Matrix = [1, 0, 0, 1, 0, 0];
+    const stack: Matrix[] = [];
+    fnArray.forEach((fn, i) => {
+      const args = argsArray[i] as unknown[];
+      if (fn === ops.save) stack.push(ctm);
+      else if (fn === ops.restore) ctm = stack.pop() ?? ctm;
+      else if (fn === ops.transform) ctm = mul(ctm, args as Matrix);
+      else if (fn === ops.paintFormXObjectBegin) {
+        stack.push(ctm);
+        const m = args[0] as number[] | null;
+        if (Array.isArray(m) && m.length === 6) ctm = mul(ctm, m as Matrix);
+      } else if (fn === ops.paintFormXObjectEnd) ctm = stack.pop() ?? ctm;
+      else if (fn === ops.paintImageXObject || fn === ops.paintInlineImageXObject) {
+        const xs = [ctm[4], ctm[0] + ctm[4], ctm[2] + ctm[4], ctm[0] + ctm[2] + ctm[4]];
+        const ys = [ctm[5], ctm[1] + ctm[5], ctm[3] + ctm[5], ctm[1] + ctm[3] + ctm[5]];
+        const img = { left: Math.min(...xs), right: Math.max(...xs), bottom: Math.min(...ys), top: Math.max(...ys) };
+        // Skip tiny things (icons, bullets) and repeats drawn in the same spot.
+        if (img.right - img.left < 24 || img.top - img.bottom < 24) return;
+        if (out.some((o) => o.page === p && Math.abs(o.left - img.left) < 1 && Math.abs(o.top - img.top) < 1)) return;
+        out.push({ key: `${p}-${out.length}`, page: p, ...img });
+      }
+    });
+  }
+  return out;
+}
 
 /** Pull positioned text and real font names (e.g. "Nunito-Bold") out of a pdf.js document. */
 export async function pdfItems(doc: PdfDoc): Promise<{ items: PdfItem[]; pageWidth: number }> {
@@ -206,6 +301,39 @@ export async function pdfItems(doc: PdfDoc): Promise<{ items: PdfItem[]; pageWid
   return { items, pageWidth };
 }
 
+/** Render each page once and cut the pictures out exactly as they appear. */
+async function cropImages(doc: unknown, images: PdfImage[]): Promise<Map<string, Blob>> {
+  const blobs = new Map<string, Blob>();
+  const pages = [...new Set(images.map((i) => i.page))];
+  for (const p of pages) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const page = await (doc as any).getPage(p);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    const ctx = canvas.getContext("2d")!;
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    for (const img of images.filter((i) => i.page === p)) {
+      const [x1, y1, x2, y2] = viewport.convertToViewportRectangle([img.left, img.bottom, img.right, img.top]);
+      const x = Math.max(0, Math.floor(Math.min(x1, x2)));
+      const y = Math.max(0, Math.floor(Math.min(y1, y2)));
+      const w = Math.min(canvas.width - x, Math.ceil(Math.abs(x2 - x1)));
+      const h = Math.min(canvas.height - y, Math.ceil(Math.abs(y2 - y1)));
+      if (w < 8 || h < 8) continue;
+      const crop = document.createElement("canvas");
+      crop.width = w;
+      crop.height = h;
+      crop.getContext("2d")!.drawImage(canvas, x, y, w, h, 0, 0, w, h);
+      // PNG keeps it lossless; the server re-encodes it as a compressed WebP.
+      const blob = await new Promise<Blob | null>((res) => crop.toBlob(res, "image/png"));
+      if (blob) blobs.set(img.key, blob);
+    }
+    canvas.width = canvas.height = 0;
+  }
+  return blobs;
+}
+
 /** Read a Blooket answer-key PDF in the browser. pdf.js is loaded only when this is used. */
 export async function readBlooketPdf(file: File) {
   const [pdfjs, worker] = await Promise.all([
@@ -225,7 +353,14 @@ export async function readBlooketPdf(file: File) {
         "This PDF has no text in it. It may have been saved before the page finished loading. Open the print page again, wait for it to load, then save.",
       );
     }
-    return parseBlooketPdf(items, pageWidth);
+    const placements = await pdfImagePlacements(doc as unknown as PdfDoc, pdfjs.OPS as unknown as Ops);
+    const parsed = parseBlooketPdf(items, pageWidth, placements);
+    // Only crop the pictures that ended up attached to a question or answer.
+    const used = new Set(
+      parsed.questions.flatMap((q) => [q.image_url, ...q.answers.map((a) => a.image_url)]).filter((u): u is string => !!u?.startsWith(PDF_IMAGE_PREFIX)).map((u) => u.slice(PDF_IMAGE_PREFIX.length)),
+    );
+    const images = await cropImages(doc, placements.filter((p) => used.has(p.key)));
+    return { ...parsed, images };
   } finally {
     doc.destroy();
   }

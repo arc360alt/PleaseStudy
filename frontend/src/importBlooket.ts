@@ -9,24 +9,32 @@
 import type { Answer, Question } from "./api";
 import type { CsvImport } from "./importCsv";
 
-/** Runs on blooket.com. Kept dependency-free and small; it only fetches and copies. */
+/**
+ * Runs on blooket.com. Kept dependency-free; it only finds the set and copies it.
+ * 1. Re-request the JSON the set page itself already loaded (from the browser's resource list).
+ * 2. Otherwise read the set out of the page's React state.
+ * 3. Otherwise report exactly what it tried, so the importer can be fixed.
+ */
 const BOOKMARKLET_SRC = `(async()=>{
 const m=location.href.match(/[0-9a-f]{24}/i);
 if(!/blooket\\.com$/.test(location.hostname)||!m){alert("Open one of your sets on blooket.com first (its address contains /set/…), then click this bookmark again.");return;}
-const id=m[0],errs=[];let data=null;
-const hasQ=o=>o&&typeof o==="object"&&(Array.isArray(o.questions)||(o.data&&Array.isArray(o.data.questions)));
-for(const u of["https://dashboard.blooket.com/api/games?gameId=","https://play.blooket.com/api/gamequestionsets?gameId=","https://api.blooket.com/api/games?gameId="]){
-try{const r=await fetch(u+id,{credentials:"include"});if(!r.ok){errs.push(u.split("/")[2]+" "+r.status);continue;}
-const j=await r.json();if(hasQ(j)){data=j;break;}errs.push(u.split("/")[2]+" no questions");}catch(e){errs.push(u.split("/")[2]+" "+e.message);}}
-if(!data){const seen=new Set();const find=o=>{if(!o||typeof o!=="object"||seen.has(o))return null;seen.add(o);
-if(Array.isArray(o.questions)&&o.questions.some(q=>q&&(q.question||q.text)))return o;
-for(const k in o){try{const f=find(o[k]);if(f)return f;}catch(e){}}return null;};
-for(const el of document.querySelectorAll("script[type='application/json'],script#__NEXT_DATA__")){try{data=find(JSON.parse(el.textContent));if(data)break;}catch(e){}}
-if(!data)errs.push("page: no questions");}
-if(!data){prompt("Couldn't read this set. Copy these details and send them to your PleaseStudy admin:",errs.join(" | "));return;}
-const text=JSON.stringify({pleasestudy:"blooket",id:id,data:data});
-const n=(data.questions||data.data.questions).length;
-try{await navigator.clipboard.writeText(text);alert("Copied "+n+" questions! Go back to PleaseStudy, open Import quiz → Blooket, and paste.");}
+const id=m[0],errs=[],short=u=>u.replace(/^https?:\\/\\//,"").slice(0,90);
+const isSet=o=>o&&typeof o==="object"&&Array.isArray(o.questions)&&o.questions.some(q=>q&&typeof q==="object"&&(q.question||q.text));
+const find=(o,d,seen)=>{if(!o||typeof o!=="object"||d>9||seen.has(o)||o.nodeType)return null;seen.add(o);if(isSet(o))return o;
+for(const k in o){if(/^(_owner|return|child|sibling|alternate|stateNode|_debug)/.test(k))continue;let v;try{v=o[k];}catch(e){continue;}const f=find(v,d+1,seen);if(f)return f;}return null;};
+let data=null;
+const urls=[...new Set(performance.getEntriesByType("resource").map(e=>e.name))].filter(u=>/blooket\\.com/.test(u)&&!/\\.(js|mjs|css|png|jpe?g|gif|svg|webp|woff2?|ttf|mp3|mp4|ico)(\\?|$)/i.test(u)).sort((a,b)=>(b.includes(id)?1:0)-(a.includes(id)?1:0));
+for(const u of urls.slice(0,25)){try{const r=await fetch(u,{credentials:"include"});if(!r.ok){errs.push(short(u)+" "+r.status);continue;}
+const t=await r.text();let j;try{j=JSON.parse(t);}catch(e){continue;}data=find(j,0,new Set());if(data)break;errs.push(short(u)+" no questions");}catch(e){errs.push(short(u)+" "+e.message);}}
+if(!data){const el=[...document.querySelectorAll("body *")].find(e=>Object.keys(e).some(k=>k.startsWith("__reactFiber$")));
+if(el){let f=el[Object.keys(el).find(k=>k.startsWith("__reactFiber$"))];while(f&&f.return)f=f.return;
+const stack=[f],seen=new Set();let n=0;while(stack.length&&n<30000&&!data){const x=stack.pop();n++;if(!x)continue;
+for(const v of[x.memoizedProps,x.memoizedState]){data=find(v,0,seen);if(data)break;}if(x.child)stack.push(x.child);if(x.sibling)stack.push(x.sibling);}
+if(!data)errs.push("react: no questions ("+n+" nodes)");}else errs.push("react: not found");}
+if(!data){prompt("Couldn't read this set. Copy these details and send them to your PleaseStudy admin:","v2 | "+urls.length+" requests | "+errs.join(" | "));return;}
+const text=JSON.stringify({pleasestudy:"blooket",id:id,data:data},(k,v)=>k.startsWith("_")&&k!=="_id"?undefined:v);
+const n=data.questions.length;
+try{await navigator.clipboard.writeText(text);alert("Copied "+n+" questions! Go back to PleaseStudy, open Import quiz → Blooket → Copy bookmark, and paste.");}
 catch(e){const t=document.createElement("textarea");t.value=text;t.style.cssText="position:fixed;inset:10%;z-index:2147483647;width:80%;height:80%";document.body.appendChild(t);t.select();
 alert("Press Ctrl+C (Cmd+C on Mac) to copy the selected text, then paste it into PleaseStudy. Click OK to close.");t.remove();}
 })()`;

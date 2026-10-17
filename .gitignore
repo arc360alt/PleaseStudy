@@ -7,3 +7,4 @@ dist/
 .env
 backups/
 *.tsbuildinfo
+backend/images/

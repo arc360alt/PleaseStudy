@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
+    media,
     auth::{AuthUser, MaybeUser, User},
     error::{ApiError, ApiResult},
     models::{clean_url, validate_questions, Question},
@@ -151,6 +152,9 @@ pub struct QuizInput {
     #[serde(default)]
     cover_url: Option<String>,
     questions: Vec<Question>,
+    /// Set when saving a quiz imported from a PDF: the import session whose id (and images) it takes over.
+    #[serde(default)]
+    import_id: Option<String>,
 }
 
 struct CleanQuiz {
@@ -232,10 +236,20 @@ pub async fn create(
     AuthUser(user): AuthUser,
     Json(input): Json<QuizInput>,
 ) -> ApiResult<Json<Value>> {
+    let import_id = input.import_id.clone();
     let quiz = clean(input)?;
     let conn = state.db.lock().unwrap();
     let now = util::now_secs();
-    let id = util::short_id(8);
+    let id = match import_id {
+        Some(imp) if media::claim_session(&conn, &user, &imp)? => imp,
+        Some(_) => {
+            return Err(ApiError::bad(
+                "This import expired, so its images were removed. Import the PDF again.",
+            ))
+        }
+        None => util::short_id(8),
+    };
+    media::check_refs(&state.images_dir, &id, quiz.cover_url.as_deref(), &quiz.questions)?;
     conn.execute(
         "INSERT INTO quizzes (id, owner_id, title, description, cover_url, questions, question_count, status, created_at, updated_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'private', ?8, ?8)",
@@ -250,6 +264,8 @@ pub async fn create(
             now
         ],
     )?;
+    media::end_session(&conn, &id);
+    media::gc(&state.images_dir, &conn, &id); // drop images the creator removed before saving
     Ok(Json(load(&conn, &id)?.full_json(Some(&user))))
 }
 
@@ -265,6 +281,7 @@ pub async fn update(
     if !existing.can_edit(Some(&user)) {
         return Err(ApiError::forbidden());
     }
+    media::check_refs(&state.images_dir, &id, quiz.cover_url.as_deref(), &quiz.questions)?;
     // Any change to a public (or queued) quiz must be re-reviewed.
     let status = match existing.summary.status.as_str() {
         "approved" | "pending" => "pending",
@@ -289,6 +306,7 @@ pub async fn update(
             util::now_secs()
         ],
     )?;
+    media::gc(&state.images_dir, &conn, &id); // images from deleted questions
     Ok(Json(load(&conn, &id)?.full_json(Some(&user))))
 }
 
@@ -303,6 +321,7 @@ pub async fn delete(
         return Err(ApiError::forbidden());
     }
     conn.execute("DELETE FROM quizzes WHERE id = ?1", [&id])?;
+    media::gc(&state.images_dir, &conn, &id);
     Ok(Json(json!({ "ok": true })))
 }
 

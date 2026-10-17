@@ -75,6 +75,8 @@ set +a
 PORT="${PORT:-8010}"
 DATABASE_PATH="${DATABASE_PATH:-backend/pleasestudy.db}"
 [[ "$DATABASE_PATH" = /* ]] || DATABASE_PATH="$ROOT/$DATABASE_PATH"
+IMAGES_DIR="${IMAGES_DIR:-backend/images}"
+[[ "$IMAGES_DIR" = /* ]] || IMAGES_DIR="$ROOT/$IMAGES_DIR"
 
 # ---------------------------------------------------------------- tools
 step "Checking tools"
@@ -126,8 +128,13 @@ if [[ -f "$DATABASE_PATH" ]] && command -v sqlite3 >/dev/null; then
   BACKUP="$ROOT/backups/pleasestudy-$(date +%Y%m%d-%H%M%S).db"
   sqlite3 "$DATABASE_PATH" ".backup '$BACKUP'"
   echo "Saved $BACKUP"
+  if [[ -d "$IMAGES_DIR" ]] && [[ -n "$(ls -A "$IMAGES_DIR" 2>/dev/null)" ]]; then
+    tar -czf "${BACKUP%.db}-images.tar.gz" -C "$(dirname "$IMAGES_DIR")" "$(basename "$IMAGES_DIR")"
+    echo "Saved ${BACKUP%.db}-images.tar.gz"
+  fi
   # Keep the 10 most recent backups.
   ls -1t "$ROOT"/backups/pleasestudy-*.db 2>/dev/null | tail -n +11 | xargs rm -f
+  ls -1t "$ROOT"/backups/pleasestudy-*-images.tar.gz 2>/dev/null | tail -n +11 | xargs rm -f
 fi
 
 # ---------------------------------------------------------------- run

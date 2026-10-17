@@ -6,6 +6,7 @@ mod error;
 mod gifs;
 mod import;
 mod live;
+mod media;
 mod models;
 mod moderation;
 mod profile;
@@ -24,7 +25,9 @@ use axum::{
     Router,
 };
 use rusqlite::Connection;
+use axum::http::{header, HeaderValue};
 use tower_http::{
+    set_header::SetResponseHeaderLayer,
     cors::CorsLayer,
     services::{ServeDir, ServeFile},
 };
@@ -34,6 +37,8 @@ pub struct AppState {
     pub db: Mutex<Connection>,
     pub games: live::Registry,
     pub http: reqwest::Client,
+    /// Where PDF-imported images live (`<dir>/<quiz id>/<file>.webp`).
+    pub images_dir: std::path::PathBuf,
     pub klipy_key: Option<String>,
 }
 
@@ -58,13 +63,18 @@ async fn main() {
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .expect("failed to build HTTP client");
+    let images_dir = std::path::PathBuf::from(env::var("IMAGES_DIR").unwrap_or_else(|_| "images".into()));
+    std::fs::create_dir_all(&images_dir).expect("failed to create images directory");
     let state: Shared = Arc::new(AppState {
         db: Mutex::new(conn),
         games: live::Registry::default(),
         http,
         klipy_key,
+        images_dir: images_dir.clone(),
     });
     live::spawn_reaper(state.clone());
+    media::sweep(&state); // clean up anything left from before a restart
+    media::spawn_sweeper(state.clone());
 
     let api = Router::new()
         .route("/api/auth/register", post(auth::register))
@@ -101,6 +111,12 @@ async fn main() {
         )
         .route("/api/avatars/:id", get(profile::get_avatar))
         .route("/api/import/kahoot", post(import::kahoot))
+        .route("/api/import/session", post(media::start_session))
+        .route("/api/import/session/:id", axum::routing::delete(media::discard_session))
+        .route(
+            "/api/import/session/:id/images",
+            put(media::upload_image).layer(DefaultBodyLimit::max(media::MAX_UPLOAD_BYTES + 64 * 1024)),
+        )
         .route("/api/gifs/status", get(gifs::status))
         .route("/api/gifs/search", get(gifs::search))
         .route("/api/assignments", post(assignments::create))
@@ -122,6 +138,20 @@ async fn main() {
     let app = api
         .route("/api/*rest", any(|| async { error::ApiError::not_found("API route") }))
         .nest_service("/assets", ServeDir::new(format!("{static_dir}/assets")))
+        // Stored images: random file names never change, so cache them for good.
+        .nest_service(
+            "/images",
+            Router::new()
+                .fallback_service(ServeDir::new(&images_dir))
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::X_CONTENT_TYPE_OPTIONS,
+                    HeaderValue::from_static("nosniff"),
+                ))
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=31536000, immutable"),
+                )),
+        )
         .fallback_service(spa).layer(CorsLayer::permissive()).with_state(state);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await.expect("failed to bind port");

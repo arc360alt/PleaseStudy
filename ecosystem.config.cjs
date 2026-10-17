@@ -31,6 +31,8 @@ module.exports = {
       env: {
         PORT: env.PORT || "8010",
         DATABASE_PATH: resolve(env.DATABASE_PATH || "backend/pleasestudy.db"),
+        // Pictures saved from Blooket PDF imports (<dir>/<quiz id>/<file>.webp).
+        IMAGES_DIR: resolve(env.IMAGES_DIR || "backend/images"),
         STATIC_DIR: path.join(root, "frontend/dist"),
         KLIPY_API_KEY: env.KLIPY_API_KEY || "",
         RUST_LOG: env.RUST_LOG || "pleasestudy=info",
