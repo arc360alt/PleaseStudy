@@ -7,7 +7,7 @@ A Kahoot/Blooket-style quiz game. Rust (axum + SQLite + WebSockets) backend, Typ
 **Development** (two terminals, hot reload):
 
 ```sh
-cd backend && cargo run          # API on http://localhost:8080
+cd backend && cargo run          # API on http://localhost:8010
 cd frontend && npm install && npm run dev   # open http://localhost:5173
 ```
 
@@ -15,10 +15,10 @@ cd frontend && npm install && npm run dev   # open http://localhost:5173
 
 ```sh
 cd frontend && npm run build
-cd ../backend && cargo run --release        # open http://localhost:8080
+cd ../backend && cargo run --release        # open http://localhost:8010
 ```
 
-Env vars: `PORT` (8080), `DATABASE_PATH` (pleasestudy.db), `STATIC_DIR` (../frontend/dist).
+Env vars: `PORT` (8010), `DATABASE_PATH` (pleasestudy.db), `STATIC_DIR` (../frontend/dist).
 
 **The first account you register becomes the admin.** Admins can promote others to moderator under Moderation → Users & roles.
 
@@ -32,7 +32,7 @@ The Rust server serves the website, the API and live-game WebSockets on **one po
 ```
 
 - Settings live in `.env` (created from `.env.example` on first run): `PORT`, `DATABASE_PATH`, `KLIPY_API_KEY`.
-- Point your tunnel at `http://localhost:8080`, e.g. `cloudflared tunnel --url http://localhost:8080`.
+- Point your tunnel at `http://localhost:8010`, e.g. `cloudflared tunnel --url http://localhost:8010`.
 - Each deploy saves a database backup in `backups/` (the last 10 are kept).
 - `pm2 logs pleasestudy` for logs; `pm2 startup` (once) to start on boot.
 

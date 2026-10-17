@@ -29,7 +29,7 @@ module.exports = {
       script: path.join(root, "backend/target/release/pleasestudy"),
       interpreter: "none",
       env: {
-        PORT: env.PORT || "8080",
+        PORT: env.PORT || "8010",
         DATABASE_PATH: resolve(env.DATABASE_PATH || "backend/pleasestudy.db"),
         STATIC_DIR: path.join(root, "frontend/dist"),
         KLIPY_API_KEY: env.KLIPY_API_KEY || "",

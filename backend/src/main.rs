@@ -46,7 +46,7 @@ async fn main() {
 
     let db_path = env::var("DATABASE_PATH").unwrap_or_else(|_| "pleasestudy.db".into());
     let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| "../frontend/dist".into());
-    let port: u16 = env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8080);
+    let port: u16 = env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8010);
 
     let conn = db::open(&db_path).expect("failed to open database");
     let klipy_key = env::var("KLIPY_API_KEY").ok().filter(|k| !k.trim().is_empty());

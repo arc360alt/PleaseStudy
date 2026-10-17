@@ -27,7 +27,7 @@ set -a
 # shellcheck disable=SC1091
 source .env
 set +a
-PORT="${PORT:-8080}"
+PORT="${PORT:-8010}"
 DATABASE_PATH="${DATABASE_PATH:-backend/pleasestudy.db}"
 [[ "$DATABASE_PATH" = /* ]] || DATABASE_PATH="$ROOT/$DATABASE_PATH"
 
