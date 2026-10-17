@@ -1,0 +1,2 @@
+- Add gamemodes and games like blooket and kahoot
+- Improve the stability and security
