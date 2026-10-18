@@ -66,7 +66,38 @@ function segments(items: PdfItem[], rightCol: number | null, mid: number): Segme
   return out.map((s) => ({ ...s, text: s.text.replace(/\s+/g, " ").trim() })).filter((s) => s.text);
 }
 
-type DraftAnswer = { letter: string; text: string; boldChars: number; chars: number; col: number; page: number; y: number; image?: string };
+type DraftAnswer = {
+  letter: string;
+  text: string;
+  boldChars: number;
+  chars: number;
+  /** Characters per font, for PDFs whose font names don't say which is bold. */
+  fonts: Map<string, number>;
+  col: number;
+  page: number;
+  y: number;
+  image?: string;
+};
+
+const addFonts = (into: Map<string, number>, from: Map<string, number>) => {
+  for (const [f, n] of from) into.set(f, (into.get(f) ?? 0) + n);
+};
+const dominant = (fonts: Map<string, number>) => [...fonts].sort((a, b) => b[1] - a[1])[0]?.[0];
+
+/**
+ * Which answers are marked correct. Blooket sets correct answers in bold. Safari's PDFs name the
+ * fonts ("Nunito-Bold"), but Chrome's give every weight the same name ("Nunito-ExtraLight"), so
+ * then we compare the fonts themselves: most answer text is wrong answers, so the most common
+ * answer font is "not correct" and answers set in a different font are the correct ones.
+ */
+function correctnessTest(answers: DraftAnswer[]): (a: DraftAnswer) => boolean {
+  const all = new Map<string, number>();
+  for (const a of answers) addFonts(all, a.fonts);
+  const named = [...all.keys()].some(isBoldFont);
+  if (named || all.size < 2) return (a) => a.chars > 0 && a.boldChars / a.chars > 0.5;
+  const regular = dominant(all);
+  return (a) => a.chars > 0 && dominant(a.fonts) !== regular;
+}
 type Draft = { text: string; h: number; page: number; y: number; image?: string; answers: DraftAnswer[]; extra: Segment[] };
 
 /** Is (page, y) at or above (page2, y2) in reading order? */
@@ -151,7 +182,16 @@ export function parseBlooketPdf(
     const chars = [...s.fonts.values()].reduce((a, b) => a + b, 0);
     const a = s.text.match(aStart);
     if (a && s.h < qHeight - 0.5) {
-      const ans: DraftAnswer = { letter: a[1].toLowerCase(), text: a[2], boldChars: bold, chars, col, page: s.page, y: s.y };
+      const ans: DraftAnswer = {
+        letter: a[1].toLowerCase(),
+        text: a[2],
+        boldChars: bold,
+        chars,
+        fonts: new Map(s.fonts),
+        col,
+        page: s.page,
+        y: s.y,
+      };
       cur.answers.push(ans);
       lastAnswer[col] = ans;
     } else if (cur.answers.length === 0 && s.h >= qHeight - 0.5) {
@@ -161,6 +201,7 @@ export function parseBlooketPdf(
       ans.text = `${ans.text} ${s.text}`.trim(); // answer wrapped onto another line
       ans.boldChars += bold;
       ans.chars += chars;
+      addFonts(ans.fonts, s.fonts);
     } else {
       cur.extra.push(s);
     }
@@ -169,6 +210,7 @@ export function parseBlooketPdf(
   placeImages(drafts, images, mid);
   const ref = (key?: string) => (key ? PDF_IMAGE_PREFIX + key : null);
 
+  const isCorrect = correctnessTest(drafts.flatMap((d) => d.answers));
   const questions: Question[] = [];
   const skipped: CsvImport["skipped"] = [];
   drafts.forEach((d, i) => {
@@ -195,7 +237,7 @@ export function parseBlooketPdf(
       // A picture answer's letter is still printed bold when it's correct.
       .map((a) => ({
         text: a.text.slice(0, 120),
-        correct: a.chars > 0 && a.boldChars / a.chars > 0.5,
+        correct: isCorrect(a),
         image_url: ref(a.image),
       }));
     if (answers.length < 2) return skipped.push({ number, reason: "fewer than 2 answers" });
@@ -204,7 +246,12 @@ export function parseBlooketPdf(
     questions.push({ kind: "single", text, image_url: ref(d.image), time_limit: 20, answers: answers.slice(0, 6) });
   });
 
-  if (!questions.length) throw new Error("None of the questions in this PDF could be read.");
+  if (!questions.length) {
+    const why = skipped.every((x) => /correct/.test(x.reason))
+      ? " Couldn't tell which answers are marked correct. Make sure you printed the answer key, not the blank worksheet."
+      : "";
+    throw new Error("None of the questions in this PDF could be read." + why);
+  }
   return { questions: questions.slice(0, 100), total: drafts.length, skipped, title, description };
 }
 
@@ -285,7 +332,8 @@ export async function pdfItems(doc: PdfDoc): Promise<{ items: PdfItem[]; pageWid
         } catch {
           /* font not loaded: fall back to the internal id */
         }
-        names.set(it.fontName, name);
+        // Keep the internal id too: some PDFs give different weights the same name.
+        names.set(it.fontName, `${name}#${it.fontName}`);
       }
       items.push({
         str: it.str,
